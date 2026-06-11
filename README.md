@@ -265,6 +265,16 @@ project mostly in my free time.
 
 ## Contributing
 
+If you use Nix, this repository now provides a devshell:
+
+```sh
+nix develop
+```
+
+That shell includes the Rust toolchain, Node, `wasm-pack`, `mdbook`, and the
+linker setup used for normal contributor workflows. The full local-development
+guide still lives in [CONTRIBUTING.md](https://github.com/sebadob/rauthy/blob/main/CONTRIBUTING.md).
+
 If you want to contribute to this repository, please take a look at
 [CONTRIBUTING.md](https://github.com/sebadob/rauthy/blob/main/CONTRIBUTING.md)
 

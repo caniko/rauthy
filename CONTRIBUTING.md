@@ -94,6 +94,16 @@ images you might find in production.
 
 ### Initial Development Setup
 
+If you use Nix, you can enter the tracked development shell first:
+
+```
+nix develop
+```
+
+The flake provisions the Rust toolchain, Node, `wasm-pack`, `mdbook`, and the
+linker setup expected by the regular `just` recipes. After entering the shell,
+the rest of the setup stays the same.
+
 If you start inside a freshly cloned project, you first need to execute
 
 ```
