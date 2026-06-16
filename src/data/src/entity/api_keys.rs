@@ -346,7 +346,6 @@ impl ApiKeyEntity {
 // run into deserialization issues!
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AccessGroup {
-    ApiKeys,
     Blacklist,
     Clients,
     Events,
@@ -360,6 +359,7 @@ pub enum AccessGroup {
     Users,
     Pam,
     AuthProviders,
+    ApiKeys,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -462,7 +462,6 @@ impl From<ApiKey> for ApiKeyResponse {
 impl From<AccessGroup> for rauthy_api_types::api_keys::AccessGroup {
     fn from(value: AccessGroup) -> Self {
         match value {
-            AccessGroup::ApiKeys => Self::ApiKeys,
             AccessGroup::Blacklist => Self::Blacklist,
             AccessGroup::Clients => Self::Clients,
             AccessGroup::Events => Self::Events,
@@ -476,6 +475,7 @@ impl From<AccessGroup> for rauthy_api_types::api_keys::AccessGroup {
             AccessGroup::Users => Self::Users,
             AccessGroup::Pam => Self::Pam,
             AccessGroup::AuthProviders => Self::AuthProviders,
+            AccessGroup::ApiKeys => Self::ApiKeys,
         }
     }
 }
@@ -507,7 +507,6 @@ impl From<ApiKeyAccess> for rauthy_api_types::api_keys::ApiKeyAccess {
 impl From<rauthy_api_types::api_keys::AccessGroup> for AccessGroup {
     fn from(value: rauthy_api_types::api_keys::AccessGroup) -> Self {
         match value {
-            rauthy_api_types::api_keys::AccessGroup::ApiKeys => Self::ApiKeys,
             rauthy_api_types::api_keys::AccessGroup::Blacklist => Self::Blacklist,
             rauthy_api_types::api_keys::AccessGroup::Clients => Self::Clients,
             rauthy_api_types::api_keys::AccessGroup::Events => Self::Events,
@@ -521,6 +520,7 @@ impl From<rauthy_api_types::api_keys::AccessGroup> for AccessGroup {
             rauthy_api_types::api_keys::AccessGroup::Users => Self::Users,
             rauthy_api_types::api_keys::AccessGroup::Pam => Self::Pam,
             rauthy_api_types::api_keys::AccessGroup::AuthProviders => Self::AuthProviders,
+            rauthy_api_types::api_keys::AccessGroup::ApiKeys => Self::ApiKeys,
         }
     }
 }
