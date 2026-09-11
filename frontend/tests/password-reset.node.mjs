@@ -23,7 +23,15 @@ before(async () => {
 });
 after(async () => browser?.close());
 
-for (const scenario of ['password-only', 'passkey', 'start-rejected', 'finish-rejected']) {
+for (const scenario of [
+    'password-only',
+    'passkey',
+    'non-resident-key',
+    'start-rejected',
+    'finish-rejected',
+    'put-rejected',
+    'cancelled',
+]) {
     test(`reset page: ${scenario}`, async t => {
         const context = await browser.newContext({ serviceWorkers: 'block' });
         t.after(() => context.close());
@@ -44,7 +52,10 @@ for (const scenario of ['password-only', 'passkey', 'start-rejected', 'finish-re
         };
         let challengeCode;
         let mfaCode;
-        let rejected = false;
+        let createdCredId;
+        let startRejected = false;
+        let finishRejected = false;
+        let putRejected = false;
         const requests = [];
         const documentPath = '/auth/v1/users/reset-user/reset/reset';
         await context.route('**/*', async route => {
@@ -75,32 +86,36 @@ for (const scenario of ['password-only', 'passkey', 'start-rejected', 'finish-re
             requests.push(`${request.method()} ${url.pathname}`);
             if (url.pathname === '/auth/v1/users/reset-user/webauthn/auth/start') {
                 assert.deepEqual(request.postDataJSON(), { purpose: 'PasswordReset' });
-                if (scenario === 'start-rejected' && !rejected) {
-                    rejected = true;
+                if (scenario === 'start-rejected' && !startRejected) {
+                    startRejected = true;
                     return route.fulfill({
                         status: 400,
                         json: { message: 'Reset binding rejected' },
                     });
                 }
                 challengeCode = crypto.randomUUID();
+                const publicKey = {
+                    challenge: btoa(crypto.randomUUID()),
+                    rpId: 'localhost',
+                    userVerification: 'required',
+                };
+                if (createdCredId) {
+                    publicKey.allowCredentials = [{ id: createdCredId, type: 'public-key' }];
+                }
                 return route.fulfill({
+                    // Short expiry for the cancelled ceremony so the test does not
+                    // wait out the full WebAuthn timeout with no authenticator present.
                     json: {
                         code: challengeCode,
-                        exp: 60,
-                        rcr: {
-                            publicKey: {
-                                challenge: btoa(crypto.randomUUID()),
-                                rpId: 'localhost',
-                                userVerification: 'required',
-                            },
-                        },
+                        exp: scenario === 'cancelled' ? 6 : 60,
+                        rcr: { publicKey },
                     },
                 });
             }
             if (url.pathname === '/auth/v1/users/webauthn_finish') {
                 assert.ok(request.postDataJSON().code === challengeCode);
-                if (scenario === 'finish-rejected' && !rejected) {
-                    rejected = true;
+                if (scenario === 'finish-rejected' && !finishRejected) {
+                    finishRejected = true;
                     return route.fulfill({
                         status: 403,
                         json: { message: 'Verification rejected' },
@@ -119,6 +134,10 @@ for (const scenario of ['password-only', 'passkey', 'start-rejected', 'finish-re
                 assert.ok(request.headers()['x-pwd-csrf-token'] === tpl.csrf_token);
                 assert.ok(body.mfa_code === (tpl.needs_mfa ? mfaCode : undefined));
                 assert.ok(typeof body.password === 'string' && body.password.length >= 12);
+                if (scenario === 'put-rejected' && !putRejected) {
+                    putRejected = true;
+                    return route.fulfill({ status: 400, json: { message: 'Reset rejected' } });
+                }
                 return route.fulfill({ status: 202 });
             }
             return route.fulfill({ status: 400, json: { message: 'Unexpected endpoint' } });
@@ -127,7 +146,7 @@ for (const scenario of ['password-only', 'passkey', 'start-rejected', 'finish-re
         await page.locator('input[type=password]').first().waitFor();
         const cdp = await context.newCDPSession(page);
         await cdp.send('WebAuthn.enable');
-        await cdp.send('WebAuthn.addVirtualAuthenticator', {
+        const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
             options: {
                 protocol: 'ctap2',
                 transport: 'internal',
@@ -137,59 +156,97 @@ for (const scenario of ['password-only', 'passkey', 'start-rejected', 'finish-re
                 automaticPresenceSimulation: true,
             },
         });
-        await page.evaluate(async needsMfa => {
-            if (needsMfa) {
-                await navigator.credentials.create({
-                    publicKey: {
-                        challenge: crypto.getRandomValues(new Uint8Array(32)),
-                        rp: { name: 'Reset test', id: 'localhost' },
-                        user: {
-                            id: crypto.getRandomValues(new Uint8Array(16)),
-                            name: 'reset-user',
-                            displayName: 'Reset user',
-                        },
-                        pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
-                        authenticatorSelection: {
-                            residentKey: 'required',
-                            userVerification: 'required',
-                        },
-                    },
-                });
-            }
-            const password = `${crypto.randomUUID()}aA1!`;
-            for (const input of document.querySelectorAll('input[type=password]')) {
-                input.value = password;
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-        }, tpl.needs_mfa);
+        if (scenario === 'cancelled') {
+            // No authenticator at ceremony time: the prompt fails and nothing
+            // must be sent beyond the already-issued start request.
+            await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });
+            await page.evaluate(() => {
+                const password = `${crypto.randomUUID()}aA1!`;
+                for (const input of document.querySelectorAll('input[type=password]')) {
+                    input.value = password;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            });
+        } else {
+            createdCredId = await page.evaluate(
+                async ({ createCredential, residentKey }) => {
+                    let credentialId;
+                    if (createCredential) {
+                        const credential = await navigator.credentials.create({
+                            publicKey: {
+                                challenge: crypto.getRandomValues(new Uint8Array(32)),
+                                rp: { name: 'Reset test', id: 'localhost' },
+                                user: {
+                                    id: crypto.getRandomValues(new Uint8Array(16)),
+                                    name: 'reset-user',
+                                    displayName: 'Reset user',
+                                },
+                                pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+                                authenticatorSelection: {
+                                    residentKey,
+                                    userVerification: 'required',
+                                },
+                            },
+                        });
+                        credentialId = credential.id;
+                    }
+                    const password = `${crypto.randomUUID()}aA1!`;
+                    for (const input of document.querySelectorAll('input[type=password]')) {
+                        input.value = password;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                    return credentialId;
+                },
+                {
+                    createCredential: tpl.needs_mfa,
+                    residentKey: scenario === 'non-resident-key' ? 'discouraged' : 'required',
+                },
+            );
+        }
         await page.getByRole('button', { name: 'Save', exact: true }).click();
-        if (scenario.endsWith('rejected')) {
+        const startReq = 'POST /auth/v1/users/reset-user/webauthn/auth/start';
+        const finishReq = 'POST /auth/v1/users/webauthn_finish';
+        const putReq = 'PUT /auth/v1/users/reset-user/reset';
+        if (scenario === 'cancelled') {
+            await page.locator('.err').first().waitFor();
+            assert.deepEqual(requests, [startReq]);
+            return;
+        }
+        if (scenario === 'start-rejected' || scenario === 'finish-rejected') {
             await page
                 .getByText(
                     scenario === 'start-rejected'
                         ? 'Reset binding rejected'
                         : 'Verification rejected',
-                    { exact: true },
+                    {
+                        exact: true,
+                    },
                 )
                 .first()
                 .waitFor();
-        } else {
-            await page.getByRole('link', { name: 'Account', exact: true }).waitFor();
-        }
-        const expected = [];
-        if (tpl.needs_mfa) expected.push('POST /auth/v1/users/reset-user/webauthn/auth/start');
-        if (tpl.needs_mfa && scenario !== 'start-rejected')
-            expected.push('POST /auth/v1/users/webauthn_finish');
-        if (!scenario.endsWith('rejected')) expected.push('PUT /auth/v1/users/reset-user/reset');
-        assert.deepEqual(requests, expected);
-        if (scenario.endsWith('rejected')) {
+            assert.deepEqual(
+                requests,
+                scenario === 'start-rejected' ? [startReq] : [startReq, finishReq],
+            );
             await page.getByRole('button', { name: 'Save', exact: true }).click();
             await page.getByRole('link', { name: 'Account', exact: true }).waitFor();
-            assert.deepEqual(requests.slice(expected.length), [
-                'POST /auth/v1/users/reset-user/webauthn/auth/start',
-                'POST /auth/v1/users/webauthn_finish',
-                'PUT /auth/v1/users/reset-user/reset',
-            ]);
+            assert.deepEqual(requests.slice(-3), [startReq, finishReq, putReq]);
+            return;
         }
+        if (scenario === 'put-rejected') {
+            await page.getByText('Reset rejected', { exact: true }).first().waitFor();
+            assert.ok(
+                (await page.getByRole('link', { name: 'Account', exact: true }).count()) === 0,
+            );
+            assert.deepEqual(requests, [startReq, finishReq, putReq]);
+            // A rejected update consumes the MFA proof: retry needs a fresh ceremony.
+            await page.getByRole('button', { name: 'Save', exact: true }).click();
+            await page.getByRole('link', { name: 'Account', exact: true }).waitFor();
+            assert.deepEqual(requests.slice(-3), [startReq, finishReq, putReq]);
+            return;
+        }
+        await page.getByRole('link', { name: 'Account', exact: true }).waitFor();
+        const expected = tpl.needs_mfa ? [startReq, finishReq, putReq] : [putReq];
+        assert.deepEqual(requests, expected);
     });
 }
