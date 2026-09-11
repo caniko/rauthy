@@ -30,7 +30,7 @@ for (const scenario of [
     'start-rejected',
     'finish-rejected',
     'put-rejected',
-    'cancelled',
+    'authenticator-timeout',
 ]) {
     test(`reset page: ${scenario}`, async t => {
         const context = await browser.newContext({ serviceWorkers: 'block' });
@@ -103,11 +103,11 @@ for (const scenario of [
                     publicKey.allowCredentials = [{ id: createdCredId, type: 'public-key' }];
                 }
                 return route.fulfill({
-                    // Short expiry for the cancelled ceremony so the test does not
+                    // Short expiry for the timeout scenario so the test does not
                     // wait out the full WebAuthn timeout with no authenticator present.
                     json: {
                         code: challengeCode,
-                        exp: scenario === 'cancelled' ? 6 : 60,
+                        exp: scenario === 'authenticator-timeout' ? 6 : 60,
                         rcr: { publicKey },
                     },
                 });
@@ -156,9 +156,9 @@ for (const scenario of [
                 automaticPresenceSimulation: true,
             },
         });
-        if (scenario === 'cancelled') {
-            // No authenticator at ceremony time: the prompt fails and nothing
-            // must be sent beyond the already-issued start request.
+        if (scenario === 'authenticator-timeout') {
+            // No authenticator is available, so the prompt times out and
+            // nothing must be sent beyond the already-issued start request.
             await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });
             await page.evaluate(() => {
                 const password = `${crypto.randomUUID()}aA1!`;
@@ -207,7 +207,7 @@ for (const scenario of [
         const startReq = 'POST /auth/v1/users/reset-user/webauthn/auth/start';
         const finishReq = 'POST /auth/v1/users/webauthn_finish';
         const putReq = 'PUT /auth/v1/users/reset-user/reset';
-        if (scenario === 'cancelled') {
+        if (scenario === 'authenticator-timeout') {
             await page.locator('.err').first().waitFor();
             assert.deepEqual(requests, [startReq]);
             return;
